@@ -96,6 +96,8 @@
   .tick.on.diet{background:var(--diet);border-color:var(--diet);}
   .tick.on.recovery{background:var(--recovery);border-color:var(--recovery);}
   .tick.on.workout{background:var(--workout);border-color:var(--workout);}
+  .tick.locked{opacity:0.35;cursor:not-allowed;}
+  .tick.locked:hover{transform:none;}
   .tick svg{width:16px;height:16px;opacity:0;transition:opacity .1s ease;}
   .tick.on svg{opacity:1;}
 
@@ -203,6 +205,10 @@ firebase.initializeApp(firebaseConfig);
 const db = firebase.database();
 // ------------------------------------------
 
+// Only someone who knows this can remove a person from the group.
+// Change this to your own secret before going live.
+const ADMIN_PASSWORD = "changeme123";
+
 const DAYS = ["Mon","Tue","Wed","Thu","Fri","Sat"];
 const CATS = ["diet","recovery","workout"];
 
@@ -235,11 +241,17 @@ let allUsers = [];
 async function loadUsers(){
   try{
     const snap = await db.ref('users').once('value');
-    allUsers = snap.val() || [];
+    const val = snap.val() || {};
+    allUsers = Object.values(val);
   }catch(e){ console.error(e); allUsers = []; }
 }
-async function saveUsers(){
-  await db.ref('users').set(allUsers);
+// Adds/removes ONE user at a time — never overwrites the whole list,
+// so two friends adding their names at the same moment can't wipe each other out.
+async function addUserToGroup(name){
+  await db.ref(`users/${safeKey(name)}`).set(name);
+}
+async function removeUserFromGroup(name){
+  await db.ref(`users/${safeKey(name)}`).remove();
 }
 
 function renderUserSelect(){
@@ -302,18 +314,18 @@ async function renderGrid(){
   DAYS.forEach((d,i)=>{
     const date = dates[i];
     const dateStr = fmtDate(date);
+    const isToday = dateStr === todayStr;
     const dayData = weekData[d] || {diet:false,recovery:false,workout:false};
     const tr = document.createElement('tr');
-    if(dateStr === todayStr) tr.querySelector; // no-op placeholder
     tr.innerHTML = `
-      <td class="day ${dateStr===todayStr?'today':''}">${d}<span class="date">${date.toLocaleDateString('en-GB',{day:'numeric',month:'short'})}</span></td>
-      ${CATS.map(c=>`<td><button class="tick ${c} ${dayData[c]?'on':''}" data-day="${d}" data-cat="${c}">${checkSvg()}</button></td>`).join('')}
+      <td class="day ${isToday?'today':''}">${d}<span class="date">${date.toLocaleDateString('en-GB',{day:'numeric',month:'short'})}</span></td>
+      ${CATS.map(c=>`<td><button class="tick ${c} ${dayData[c]?'on':''} ${isToday?'':'locked'}" data-day="${d}" data-cat="${c}" ${isToday?'':'disabled title="Only today can be edited"'}>${checkSvg()}</button></td>`).join('')}
       <td class="pts">${pointsForDay(dayData)}</td>
     `;
     body.appendChild(tr);
   });
 
-  body.querySelectorAll('.tick').forEach(btn=>{
+  body.querySelectorAll('.tick:not(.locked)').forEach(btn=>{
     btn.addEventListener('click', async ()=>{
       const day = btn.dataset.day, cat = btn.dataset.cat;
       const weekData = await getWeekEntry(currentUser, currentMonday);
@@ -384,11 +396,11 @@ async function renderMonth(){
 
 document.getElementById('prevWeek').addEventListener('click', async ()=>{
   currentMonday = new Date(currentMonday); currentMonday.setDate(currentMonday.getDate()-7);
-  await renderGrid(); await renderLeaderboard(); await renderMonth();
+  attachWeekListener();
 });
 document.getElementById('nextWeek').addEventListener('click', async ()=>{
   currentMonday = new Date(currentMonday); currentMonday.setDate(currentMonday.getDate()+7);
-  await renderGrid(); await renderLeaderboard(); await renderMonth();
+  attachWeekListener();
 });
 document.getElementById('userSelect').addEventListener('change', async (e)=>{
   currentUser = e.target.value;
@@ -396,11 +408,16 @@ document.getElementById('userSelect').addEventListener('change', async (e)=>{
 });
 document.getElementById('removeUserBtn').addEventListener('click', async ()=>{
   if(!currentUser) return;
+  const pw = prompt('Enter admin password to remove someone:');
+  if(pw === null) return;
+  if(pw !== ADMIN_PASSWORD){
+    alert('Wrong password — only the group admin can remove people.');
+    return;
+  }
   const ok = confirm(`Remove "${currentUser}" from the group? This also deletes their tracked days.`);
   if(!ok) return;
   const nameToRemove = currentUser;
-  allUsers = allUsers.filter(u => u !== nameToRemove);
-  await saveUsers();
+  await removeUserFromGroup(nameToRemove);
   // remove their data across all weeks
   try{
     const snap = await db.ref('weeks').once('value');
@@ -411,36 +428,54 @@ document.getElementById('removeUserBtn').addEventListener('click', async ()=>{
     });
     if(Object.keys(updates).length) await db.ref().update(updates);
   }catch(e){ console.error(e); }
-  currentUser = allUsers.length ? allUsers[0] : null;
-  renderUserSelect();
-  await renderGrid();
-  await renderLeaderboard();
-  await renderMonth();
+  currentUser = null; // the realtime 'users' listener below will repopulate + re-render
 });
 
 document.getElementById('addUserBtn').addEventListener('click', async ()=>{
   const input = document.getElementById('newUserInput');
   const name = input.value.trim();
   if(!name) return;
-  if(!allUsers.includes(name)){
-    allUsers.push(name);
-    await saveUsers();
-  }
+  await addUserToGroup(name);
   currentUser = name;
   input.value = '';
-  renderUserSelect();
+  // realtime 'users' listener will re-render the dropdown/board;
+  // render the grid now so this person sees their own state immediately
   await renderGrid();
-  await renderLeaderboard();
-  await renderMonth();
 });
 
+// Live sync: whenever ANYONE adds/removes a name, or ticks a box anywhere
+// in the currently-viewed week, everyone's screen updates automatically —
+// no refresh needed.
+let currentWeekListenerRef = null;
+
+function attachWeekListener(){
+  if(currentWeekListenerRef) currentWeekListenerRef.off();
+  currentWeekListenerRef = db.ref(`weeks/${weekKey(currentMonday)}`);
+  currentWeekListenerRef.on('value', async ()=>{
+    await renderGrid();
+    await renderLeaderboard();
+    await renderMonth();
+  });
+}
+
 (async function init(){
-  await loadUsers();
-  renderUserSelect();
-  await renderGrid();
-  await renderLeaderboard();
-  await renderMonth();
+  db.ref('users').on('value', async (snap)=>{
+    const val = snap.val() || {};
+    allUsers = Object.values(val);
+    if(currentUser && !allUsers.includes(currentUser)) currentUser = null;
+    if(!currentUser && allUsers.length) currentUser = allUsers[0];
+    renderUserSelect();
+    await renderGrid();
+    await renderLeaderboard();
+    await renderMonth();
+  });
+  attachWeekListener();
 })();
 </script>
+
 </body>
+<<<<<<< HEAD
 </html>
+=======
+</html>
+>>>>>>> b7ba030 (fix shared leaderboard bug + live sync)
