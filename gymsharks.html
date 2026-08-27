@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Streak Scoreboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet">
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
+<style>
+  :root{
+    --bg: #10201b;
+    --surface: #16281f;
+    --surface-2: #1d3327;
+    --chalk: #f2efe6;
+    --muted: #8fa89c;
+    --line: #2a4234;
+    --diet: #d9556b;
+    --recovery: #4fb8a8;
+    --workout: #e3a23a;
+    --gold: #e8c468;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    background:
+      radial-gradient(1200px 600px at 10% -10%, rgba(232,196,104,0.06), transparent 60%),
+      var(--bg);
+    color:var(--chalk);
+    font-family:'Inter',sans-serif;
+    padding:32px 20px 80px;
+    min-height:100vh;
+  }
+  .wrap{max-width:920px;margin:0 auto;}
+  .chalkline{
+    border:none;border-top:2px dashed var(--line);margin:28px 0;
+  }
+  header.top{
+    display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:16px;
+  }
+  h1{
+    font-family:'Bebas Neue',sans-serif;
+    font-size:52px;letter-spacing:1px;margin:0;line-height:0.9;
+    color:var(--chalk);
+  }
+  h1 span{color:var(--gold);}
+  .sub{color:var(--muted);font-size:14px;margin-top:6px;}
+  .weeknav{
+    display:flex;align-items:center;gap:10px;background:var(--surface);
+    border:1px solid var(--line);border-radius:10px;padding:8px 14px;
+  }
+  .weeknav button{
+    background:none;border:none;color:var(--chalk);font-size:18px;cursor:pointer;
+    width:26px;height:26px;border-radius:6px;
+  }
+  .weeknav button:hover{background:var(--surface-2);}
+  .weeknav .label{font-family:'IBM Plex Mono',monospace;font-size:13px;color:var(--muted);min-width:150px;text-align:center;}
+
+  .userbar{
+    display:flex;align-items:center;gap:12px;margin-top:26px;flex-wrap:wrap;
+  }
+  .userbar label{font-size:13px;color:var(--muted);}
+  select, .addbtn, .addinput{
+    font-family:'Inter',sans-serif;font-size:14px;
+    background:var(--surface);border:1px solid var(--line);color:var(--chalk);
+    padding:9px 12px;border-radius:8px;
+  }
+  select{cursor:pointer;}
+  .addbtn{cursor:pointer;font-weight:600;}
+  .addbtn:hover{background:var(--surface-2);}
+  .addrow{display:flex;gap:8px;align-items:center;}
+
+  table.grid{
+    width:100%;border-collapse:collapse;margin-top:20px;
+    background:var(--surface);border:1px solid var(--line);border-radius:12px;overflow:hidden;
+  }
+  table.grid th, table.grid td{
+    padding:12px 10px;text-align:center;border-bottom:1px solid var(--line);
+  }
+  table.grid th{
+    font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:1px;
+    text-transform:uppercase;color:var(--muted);font-weight:500;
+  }
+  table.grid tr:last-child td{border-bottom:none;}
+  td.day{text-align:left;font-weight:600;}
+  td.day .date{display:block;font-size:11px;color:var(--muted);font-weight:400;font-family:'IBM Plex Mono',monospace;}
+  td.today{background:rgba(232,196,104,0.05);}
+
+  .tick{
+    width:30px;height:30px;border-radius:8px;border:2px solid var(--line);
+    background:transparent;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;
+    transition:transform .12s ease;
+  }
+  .tick:hover{transform:scale(1.08);}
+  .tick.on.diet{background:var(--diet);border-color:var(--diet);}
+  .tick.on.recovery{background:var(--recovery);border-color:var(--recovery);}
+  .tick.on.workout{background:var(--workout);border-color:var(--workout);}
+  .tick svg{width:16px;height:16px;opacity:0;transition:opacity .1s ease;}
+  .tick.on svg{opacity:1;}
+
+  td.pts{font-family:'IBM Plex Mono',monospace;color:var(--gold);font-weight:500;}
+
+  h2{
+    font-family:'Bebas Neue',sans-serif;font-size:26px;letter-spacing:0.5px;margin:0 0 14px;color:var(--chalk);
+  }
+  .board{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:18px 20px;}
+  .row{display:flex;align-items:center;gap:14px;padding:8px 0;}
+  .row .rank{font-family:'IBM Plex Mono',monospace;width:20px;color:var(--muted);}
+  .row .name{width:110px;font-weight:600;flex-shrink:0;}
+  .row .barbg{flex:1;background:var(--surface-2);border-radius:6px;height:14px;overflow:hidden;}
+  .row .barfill{height:100%;border-radius:6px;background:linear-gradient(90deg,var(--workout),var(--gold));}
+  .row .score{font-family:'IBM Plex Mono',monospace;width:56px;text-align:right;color:var(--muted);font-size:13px;}
+  .crown{margin-left:4px;}
+  .empty{color:var(--muted);font-size:14px;padding:8px 0;}
+
+  .monthgrid{display:flex;flex-direction:column;gap:10px;}
+  .mweek{display:flex;align-items:center;gap:14px;}
+  .mweek .wk{font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--muted);width:100px;flex-shrink:0;}
+  .mweek .bars{flex:1;display:flex;gap:6px;align-items:flex-end;height:34px;}
+  .mweek .seg{flex:1;background:var(--surface-2);border-radius:4px 4px 0 0;position:relative;height:100%;display:flex;align-items:flex-end;overflow:hidden;}
+  .mweek .seg .fill{width:100%;background:var(--recovery);}
+  .mweek .who{font-size:11px;color:var(--muted);width:70px;text-align:right;flex-shrink:0;}
+
+  .legend{display:flex;gap:18px;margin-top:14px;flex-wrap:wrap;}
+  .legend span{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);}
+  .legend i{width:10px;height:10px;border-radius:3px;display:inline-block;}
+  footer.note{color:var(--muted);font-size:12px;margin-top:36px;text-align:center;}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <div>
+      <h1>Streak <span>Scoreboard</span></h1>
+      <div class="sub">Diet · Recovery · Workout — 1 point each, tick it off, no paper needed</div>
+    </div>
+    <div class="weeknav">
+      <button id="prevWeek">‹</button>
+      <div class="label" id="weekLabel">—</div>
+      <button id="nextWeek">›</button>
+    </div>
+  </header>
+
+  <div class="userbar">
+    <label>You're marking as</label>
+    <select id="userSelect"></select>
+    <button class="addbtn" id="removeUserBtn" title="Remove this name from the group">Remove</button>
+    <div class="addrow">
+      <input class="addinput" id="newUserInput" placeholder="add your name" style="width:130px;">
+      <button class="addbtn" id="addUserBtn">+ Join</button>
+    </div>
+  </div>
+
+  <table class="grid">
+    <thead>
+      <tr>
+        <th style="text-align:left;">Day</th>
+        <th>Diet</th>
+        <th>Recovery</th>
+        <th>Workout</th>
+        <th>Pts</th>
+      </tr>
+    </thead>
+    <tbody id="gridBody"></tbody>
+  </table>
+
+  <div class="legend">
+    <span><i style="background:var(--diet)"></i>Diet</span>
+    <span><i style="background:var(--recovery)"></i>Recovery</span>
+    <span><i style="background:var(--workout)"></i>Workout</span>
+  </div>
+
+  <hr class="chalkline">
+
+  <h2>This Week's Leaderboard</h2>
+  <div class="board" id="leaderboard"><div class="empty">Loading…</div></div>
+
+  <hr class="chalkline">
+
+  <h2>Monthly Progress</h2>
+  <div class="board">
+    <div class="monthgrid" id="monthGrid"><div class="empty">Loading…</div></div>
+  </div>
+
+  <footer class="note">Shared with everyone who has this page — pick your own name, don't tick for others 🙂</footer>
+</div>
+
+<script>
+// ---- PASTE YOUR FIREBASE CONFIG HERE ----
+// Get this from: Firebase Console → Project Settings → General → Your apps → Web app
+const firebaseConfig = {
+  apiKey: "AIzaSyAcN60snySxdl6lY0RxpRZm-TZTEsSHiuQ",
+  authDomain: "gymsharks-96af0.firebaseapp.com",
+  databaseURL: "https://gymsharks-96af0-default-rtdb.firebaseio.com",
+  projectId: "gymsharks-96af0",
+  storageBucket: "gymsharks-96af0.firebasestorage.app",
+  messagingSenderId: "985528811931",
+  appId: "1:985528811931:web:57b9bf5e159d09d1b2613e"
+};
+firebase.initializeApp(firebaseConfig);
+const db = firebase.database();
+// ------------------------------------------
+
+const DAYS = ["Mon","Tue","Wed","Thu","Fri","Sat"];
+const CATS = ["diet","recovery","workout"];
+
+// Firebase keys can't contain . # $ [ ] — strip those from usernames
+function safeKey(str){ return str.replace(/[.#$\[\]]/g, ''); }
+
+function pad(n){return n.toString().padStart(2,"0");}
+function fmtDate(d){return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;}
+function mondayOf(date){
+  const d = new Date(date);
+  const day = d.getDay(); // 0 Sun .. 6 Sat
+  const diff = (day === 0 ? -6 : 1 - day);
+  d.setDate(d.getDate() + diff);
+  d.setHours(0,0,0,0);
+  return d;
+}
+function weekDates(monday){
+  return DAYS.map((_,i)=>{
+    const d = new Date(monday);
+    d.setDate(d.getDate()+i);
+    return d;
+  });
+}
+function weekKey(monday){ return fmtDate(monday); }
+
+let currentMonday = mondayOf(new Date());
+let currentUser = null;
+let allUsers = [];
+
+async function loadUsers(){
+  try{
+    const snap = await db.ref('users').once('value');
+    allUsers = snap.val() || [];
+  }catch(e){ console.error(e); allUsers = []; }
+}
+async function saveUsers(){
+  await db.ref('users').set(allUsers);
+}
+
+function renderUserSelect(){
+  const sel = document.getElementById('userSelect');
+  sel.innerHTML = '';
+  if(allUsers.length === 0){
+    const opt = document.createElement('option');
+    opt.textContent = 'no one yet — add your name';
+    sel.appendChild(opt);
+    return;
+  }
+  allUsers.forEach(u=>{
+    const opt = document.createElement('option');
+    opt.value = u; opt.textContent = u;
+    sel.appendChild(opt);
+  });
+  if(!currentUser || !allUsers.includes(currentUser)) currentUser = allUsers[0];
+  sel.value = currentUser;
+}
+
+async function getWeekEntry(username, monday){
+  const path = `weeks/${weekKey(monday)}/${safeKey(username)}`;
+  try{
+    const snap = await db.ref(path).once('value');
+    return snap.val() || {};
+  }catch(e){ console.error(e); return {}; }
+}
+async function setWeekEntry(username, monday, data){
+  const path = `weeks/${weekKey(monday)}/${safeKey(username)}`;
+  await db.ref(path).set(data);
+}
+
+function pointsForDay(dayData){
+  if(!dayData) return 0;
+  return CATS.reduce((s,c)=>s + (dayData[c]?1:0), 0);
+}
+function pointsForWeek(weekData){
+  return DAYS.reduce((s,d)=>s + pointsForDay(weekData[d]), 0);
+}
+
+function checkSvg(){
+  return '<svg viewBox="0 0 24 24" fill="none" stroke="#10201b" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 12 10 18 20 6"/></svg>';
+}
+
+async function renderGrid(){
+  const body = document.getElementById('gridBody');
+  document.getElementById('weekLabel').textContent =
+    `${weekDates(currentMonday)[0].toLocaleDateString('en-GB',{day:'numeric',month:'short'})} – ${weekDates(currentMonday)[5].toLocaleDateString('en-GB',{day:'numeric',month:'short'})}`;
+
+  if(!currentUser){
+    body.innerHTML = '<tr><td colspan="5" style="padding:20px;color:var(--muted);">Add your name above to start ticking.</td></tr>';
+    return;
+  }
+
+  const weekData = await getWeekEntry(currentUser, currentMonday);
+  const dates = weekDates(currentMonday);
+  const todayStr = fmtDate(new Date());
+  body.innerHTML = '';
+
+  DAYS.forEach((d,i)=>{
+    const date = dates[i];
+    const dateStr = fmtDate(date);
+    const dayData = weekData[d] || {diet:false,recovery:false,workout:false};
+    const tr = document.createElement('tr');
+    if(dateStr === todayStr) tr.querySelector; // no-op placeholder
+    tr.innerHTML = `
+      <td class="day ${dateStr===todayStr?'today':''}">${d}<span class="date">${date.toLocaleDateString('en-GB',{day:'numeric',month:'short'})}</span></td>
+      ${CATS.map(c=>`<td><button class="tick ${c} ${dayData[c]?'on':''}" data-day="${d}" data-cat="${c}">${checkSvg()}</button></td>`).join('')}
+      <td class="pts">${pointsForDay(dayData)}</td>
+    `;
+    body.appendChild(tr);
+  });
+
+  body.querySelectorAll('.tick').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      const day = btn.dataset.day, cat = btn.dataset.cat;
+      const weekData = await getWeekEntry(currentUser, currentMonday);
+      if(!weekData[day]) weekData[day] = {diet:false,recovery:false,workout:false};
+      weekData[day][cat] = !weekData[day][cat];
+      await setWeekEntry(currentUser, currentMonday, weekData);
+      await renderGrid();
+      await renderLeaderboard();
+      await renderMonth();
+    });
+  });
+}
+
+async function renderLeaderboard(){
+  const el = document.getElementById('leaderboard');
+  if(allUsers.length === 0){ el.innerHTML = '<div class="empty">No one has joined yet.</div>'; return; }
+
+  const results = await Promise.all(allUsers.map(async u=>{
+    const wd = await getWeekEntry(u, currentMonday);
+    return {user:u, pts: pointsForWeek(wd)};
+  }));
+  results.sort((a,b)=>b.pts - a.pts);
+  const max = Math.max(18, ...results.map(r=>r.pts));
+
+  el.innerHTML = results.map((r,i)=>`
+    <div class="row">
+      <div class="rank">${i+1}</div>
+      <div class="name">${r.user}${i===0 && r.pts>0 ? ' <span class="crown">👑</span>' : ''}</div>
+      <div class="barbg"><div class="barfill" style="width:${(r.pts/max*100).toFixed(0)}%"></div></div>
+      <div class="score">${r.pts} / 18</div>
+    </div>
+  `).join('');
+}
+
+async function renderMonth(){
+  const el = document.getElementById('monthGrid');
+  if(allUsers.length === 0){ el.innerHTML = '<div class="empty">No one has joined yet.</div>'; return; }
+
+  const monthStart = new Date(currentMonday.getFullYear(), currentMonday.getMonth(), 1);
+  const monthEnd = new Date(currentMonday.getFullYear(), currentMonday.getMonth()+1, 0);
+
+  let m = mondayOf(monthStart);
+  const weeks = [];
+  while(m <= monthEnd){
+    weeks.push(new Date(m));
+    m = new Date(m); m.setDate(m.getDate()+7);
+  }
+
+  let html = '';
+  for(const wk of weeks){
+    const results = await Promise.all(allUsers.map(async u=>{
+      const wd = await getWeekEntry(u, wk);
+      return {user:u, pts: pointsForWeek(wd)};
+    }));
+    const max = 18;
+    const label = wk.toLocaleDateString('en-GB',{day:'numeric',month:'short'});
+    html += `<div class="mweek"><div class="wk">${label}</div><div class="bars">`;
+    results.forEach(r=>{
+      const h = Math.max(4, (r.pts/max*100));
+      html += `<div class="seg" title="${r.user}: ${r.pts}pts"><div class="fill" style="height:${h}%"></div></div>`;
+    });
+    html += `</div></div>`;
+  }
+  html += `<div class="mweek"><div class="wk"></div><div class="bars">` +
+    allUsers.map(u=>`<div class="who">${u}</div>`).join('') + `</div></div>`;
+  el.innerHTML = html || '<div class="empty">Nothing logged this month yet.</div>';
+}
+
+document.getElementById('prevWeek').addEventListener('click', async ()=>{
+  currentMonday = new Date(currentMonday); currentMonday.setDate(currentMonday.getDate()-7);
+  await renderGrid(); await renderLeaderboard(); await renderMonth();
+});
+document.getElementById('nextWeek').addEventListener('click', async ()=>{
+  currentMonday = new Date(currentMonday); currentMonday.setDate(currentMonday.getDate()+7);
+  await renderGrid(); await renderLeaderboard(); await renderMonth();
+});
+document.getElementById('userSelect').addEventListener('change', async (e)=>{
+  currentUser = e.target.value;
+  await renderGrid();
+});
+document.getElementById('removeUserBtn').addEventListener('click', async ()=>{
+  if(!currentUser) return;
+  const ok = confirm(`Remove "${currentUser}" from the group? This also deletes their tracked days.`);
+  if(!ok) return;
+  const nameToRemove = currentUser;
+  allUsers = allUsers.filter(u => u !== nameToRemove);
+  await saveUsers();
+  // remove their data across all weeks
+  try{
+    const snap = await db.ref('weeks').once('value');
+    const weeksData = snap.val() || {};
+    const updates = {};
+    Object.keys(weeksData).forEach(wk=>{
+      updates[`weeks/${wk}/${safeKey(nameToRemove)}`] = null;
+    });
+    if(Object.keys(updates).length) await db.ref().update(updates);
+  }catch(e){ console.error(e); }
+  currentUser = allUsers.length ? allUsers[0] : null;
+  renderUserSelect();
+  await renderGrid();
+  await renderLeaderboard();
+  await renderMonth();
+});
+
+document.getElementById('addUserBtn').addEventListener('click', async ()=>{
+  const input = document.getElementById('newUserInput');
+  const name = input.value.trim();
+  if(!name) return;
+  if(!allUsers.includes(name)){
+    allUsers.push(name);
+    await saveUsers();
+  }
+  currentUser = name;
+  input.value = '';
+  renderUserSelect();
+  await renderGrid();
+  await renderLeaderboard();
+  await renderMonth();
+});
+
+(async function init(){
+  await loadUsers();
+  renderUserSelect();
+  await renderGrid();
+  await renderLeaderboard();
+  await renderMonth();
+})();
+</script>
+</body>
+</html>
