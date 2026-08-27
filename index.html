@@ -8,6 +8,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet">
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
 <style>
   :root{
     --bg: #10201b;
@@ -128,8 +129,45 @@
   .legend span{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);}
   .legend i{width:10px;height:10px;border-radius:3px;display:inline-block;}
   footer.note{color:var(--muted);font-size:12px;margin-top:36px;text-align:center;}
+
+  .googlebtn{
+    display:inline-flex;align-items:center;gap:10px;background:#fff;color:#1f1f1f;
+    border:1px solid var(--line);border-radius:8px;padding:9px 16px;font-weight:600;
+    font-size:14px;cursor:pointer;font-family:'Inter',sans-serif;
+  }
+  .googlebtn:hover{background:#f4f4f4;}
+  .whoami{display:flex;align-items:center;gap:10px;font-weight:600;}
+  .whoami img{width:26px;height:26px;border-radius:50%;}
+  .adminrow{margin-left:auto;display:flex;gap:8px;align-items:center;}
 </style>
 </head>
+<!--
+  IMPORTANT: after this goes live, update your Firebase Rules
+  (Firebase Console → Realtime Database → Rules) to this, so the
+  security is enforced by Firebase itself, not just by this page's code:
+
+  {
+    "rules": {
+      "users": {
+        "$uid": {
+          ".read": true,
+          ".write": "auth != null && auth.uid === $uid"
+        }
+      },
+      "weeks": {
+        "$week": {
+          "$uid": {
+            ".read": true,
+            ".write": "auth != null && auth.uid === $uid"
+          }
+        }
+      }
+    }
+  }
+
+  This means even someone editing the page's own code couldn't write to
+  someone else's data — Firebase itself would refuse it.
+-->
 <body>
 <div class="wrap">
 
@@ -145,13 +183,18 @@
     </div>
   </header>
 
-  <div class="userbar">
-    <label>You're marking as</label>
-    <select id="userSelect"></select>
-    <button class="addbtn" id="removeUserBtn" title="Remove this name from the group">Remove</button>
-    <div class="addrow">
-      <input class="addinput" id="newUserInput" placeholder="add your name" style="width:130px;">
-      <button class="addbtn" id="addUserBtn">+ Join</button>
+  <div class="userbar" id="signedOutBar">
+    <button class="googlebtn" id="googleSignInBtn">
+      <svg width="18" height="18" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.92c1.7-1.57 2.68-3.88 2.68-6.62z"/><path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.92-2.26c-.8.54-1.84.86-3.04.86-2.34 0-4.32-1.58-5.03-3.7H.96v2.33A9 9 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.97 10.72A5.4 5.4 0 0 1 3.68 9c0-.6.1-1.18.29-1.72V4.95H.96A9 9 0 0 0 0 9c0 1.45.35 2.83.96 4.05l3.01-2.33z"/><path fill="#EA4335" d="M9 3.58c1.32 0 2.51.45 3.44 1.35l2.58-2.58C13.46.89 11.43 0 9 0A9 9 0 0 0 .96 4.95l3.01 2.33C4.68 5.16 6.66 3.58 9 3.58z"/></svg>
+      Sign in with Google to start tracking
+    </button>
+  </div>
+  <div class="userbar" id="signedInBar" style="display:none;">
+    <div class="whoami"><img id="whoAmIPic" src="" alt=""><span id="whoAmIName"></span></div>
+    <div class="adminrow">
+      <select id="adminRemoveSelect"></select>
+      <button class="addbtn" id="removeUserBtn" title="Admin only">Remove</button>
+      <button class="addbtn" id="signOutBtn">Sign out</button>
     </div>
   </div>
 
@@ -186,7 +229,7 @@
     <div class="monthgrid" id="monthGrid"><div class="empty">Loading…</div></div>
   </div>
 
-  <footer class="note">Shared with everyone who has this page — pick your own name, don't tick for others 🙂</footer>
+  <footer class="note">Signed in with Google — you can only tick your own boxes. Everyone can see the shared leaderboard.</footer>
 </div>
 
 <script>
@@ -203,17 +246,15 @@ const firebaseConfig = {
 };
 firebase.initializeApp(firebaseConfig);
 const db = firebase.database();
+const auth = firebase.auth();
 // ------------------------------------------
 
 // Only someone who knows this can remove a person from the group.
 // Change this to your own secret before going live.
-const ADMIN_PASSWORD = "Gymsharks@2026";
+const ADMIN_PASSWORD = "GymSharks@2026";
 
 const DAYS = ["Mon","Tue","Wed","Thu","Fri","Sat"];
 const CATS = ["diet","recovery","workout"];
-
-// Firebase keys can't contain . # $ [ ] — strip those from usernames
-function safeKey(str){ return str.replace(/[.#$\[\]]/g, ''); }
 
 function pad(n){return n.toString().padStart(2,"0");}
 function fmtDate(d){return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;}
@@ -235,69 +276,55 @@ function weekDates(monday){
 function weekKey(monday){ return fmtDate(monday); }
 
 let currentMonday = mondayOf(new Date());
-let currentUser = null;
-let allUsers = [];
+let currentUid = null;       // set once someone is signed in with Google
+let currentName = null;
+let userMap = {};            // { uid: displayName } for everyone who has ever signed in
 
-async function loadUsers(){
-  try{
-    const snap = await db.ref('users').once('value');
-    const val = snap.val() || {};
-    allUsers = [...new Set(Object.values(val))];
-  }catch(e){ console.error(e); allUsers = []; }
+// Registers/updates this person's display name against their Google account.
+// Keyed by their Google uid — nobody else can write to this uid's data,
+// since it only ever gets written by that person's own signed-in session.
+async function registerCurrentUser(uid, name){
+  await db.ref(`users/${uid}`).set(name);
 }
-// Adds/removes ONE user at a time — never overwrites the whole list,
-// so two friends adding their names at the same moment can't wipe each other out.
-async function addUserToGroup(name){
-  // guard against duplicates, including ones saved in an older format
-  const snap = await db.ref('users').once('value');
-  const val = snap.val() || {};
-  const alreadyThere = Object.values(val).includes(name);
-  if(!alreadyThere){
-    await db.ref(`users/${safeKey(name)}`).set(name);
-  }
-}
-async function removeUserFromGroup(name){
-  // find and remove EVERY entry with this name, no matter how it was stored
-  // (handles old array-style entries as well as the newer key-per-name format)
-  const snap = await db.ref('users').once('value');
-  const val = snap.val() || {};
+async function removeUserFromGroup(uid){
+  await db.ref(`users/${uid}`).remove();
+  const snap = await db.ref('weeks').once('value');
+  const weeksData = snap.val() || {};
   const updates = {};
-  Object.keys(val).forEach(key=>{
-    if(val[key] === name) updates[`users/${key}`] = null;
+  Object.keys(weeksData).forEach(wk=>{
+    updates[`weeks/${wk}/${uid}`] = null;
   });
   if(Object.keys(updates).length) await db.ref().update(updates);
 }
 
-function renderUserSelect(){
-  const sel = document.getElementById('userSelect');
+function renderAdminSelect(){
+  const sel = document.getElementById('adminRemoveSelect');
   sel.innerHTML = '';
-  if(allUsers.length === 0){
+  const entries = Object.entries(userMap); // [uid, name]
+  if(entries.length === 0){
     const opt = document.createElement('option');
-    opt.textContent = 'no one yet — add your name';
+    opt.textContent = 'no one has joined yet';
     sel.appendChild(opt);
     return;
   }
-  allUsers.forEach(u=>{
+  entries.forEach(([uid,name])=>{
     const opt = document.createElement('option');
-    opt.value = u; opt.textContent = u;
+    opt.value = uid; opt.textContent = name;
     sel.appendChild(opt);
   });
-  if(!currentUser || !allUsers.includes(currentUser)) currentUser = allUsers[0];
-  sel.value = currentUser;
 }
 
-async function getWeekEntry(username, monday){
-  const path = `weeks/${weekKey(monday)}/${safeKey(username)}`;
+async function getWeekEntry(uid, monday){
+  const path = `weeks/${weekKey(monday)}/${uid}`;
   try{
     const snap = await db.ref(path).once('value');
     return snap.val() || {};
   }catch(e){ console.error(e); return {}; }
 }
-async function setWeekEntry(username, monday, data){
-  const path = `weeks/${weekKey(monday)}/${safeKey(username)}`;
+async function setWeekEntry(uid, monday, data){
+  const path = `weeks/${weekKey(monday)}/${uid}`;
   await db.ref(path).set(data);
 }
-
 function pointsForDay(dayData){
   if(!dayData) return 0;
   return CATS.reduce((s,c)=>s + (dayData[c]?1:0), 0);
@@ -315,12 +342,12 @@ async function renderGrid(){
   document.getElementById('weekLabel').textContent =
     `${weekDates(currentMonday)[0].toLocaleDateString('en-GB',{day:'numeric',month:'short'})} – ${weekDates(currentMonday)[5].toLocaleDateString('en-GB',{day:'numeric',month:'short'})}`;
 
-  if(!currentUser){
-    body.innerHTML = '<tr><td colspan="5" style="padding:20px;color:var(--muted);">Add your name above to start ticking.</td></tr>';
+  if(!currentUid){
+    body.innerHTML = '<tr><td colspan="5" style="padding:20px;color:var(--muted);">Sign in with Google above to start ticking.</td></tr>';
     return;
   }
 
-  const weekData = await getWeekEntry(currentUser, currentMonday);
+  const weekData = await getWeekEntry(currentUid, currentMonday);
   const dates = weekDates(currentMonday);
   const todayStr = fmtDate(new Date());
   body.innerHTML = '';
@@ -342,10 +369,10 @@ async function renderGrid(){
   body.querySelectorAll('.tick:not(.locked)').forEach(btn=>{
     btn.addEventListener('click', async ()=>{
       const day = btn.dataset.day, cat = btn.dataset.cat;
-      const weekData = await getWeekEntry(currentUser, currentMonday);
+      const weekData = await getWeekEntry(currentUid, currentMonday);
       if(!weekData[day]) weekData[day] = {diet:false,recovery:false,workout:false};
       weekData[day][cat] = !weekData[day][cat];
-      await setWeekEntry(currentUser, currentMonday, weekData);
+      await setWeekEntry(currentUid, currentMonday, weekData);
       await renderGrid();
       await renderLeaderboard();
       await renderMonth();
@@ -355,11 +382,12 @@ async function renderGrid(){
 
 async function renderLeaderboard(){
   const el = document.getElementById('leaderboard');
-  if(allUsers.length === 0){ el.innerHTML = '<div class="empty">No one has joined yet.</div>'; return; }
+  const entries = Object.entries(userMap); // [uid, name]
+  if(entries.length === 0){ el.innerHTML = '<div class="empty">No one has joined yet.</div>'; return; }
 
-  const results = await Promise.all(allUsers.map(async u=>{
-    const wd = await getWeekEntry(u, currentMonday);
-    return {user:u, pts: pointsForWeek(wd)};
+  const results = await Promise.all(entries.map(async ([uid,name])=>{
+    const wd = await getWeekEntry(uid, currentMonday);
+    return {name, pts: pointsForWeek(wd)};
   }));
   results.sort((a,b)=>b.pts - a.pts);
   const max = Math.max(18, ...results.map(r=>r.pts));
@@ -367,7 +395,7 @@ async function renderLeaderboard(){
   el.innerHTML = results.map((r,i)=>`
     <div class="row">
       <div class="rank">${i+1}</div>
-      <div class="name">${r.user}${i===0 && r.pts>0 ? ' <span class="crown">👑</span>' : ''}</div>
+      <div class="name">${r.name}${i===0 && r.pts>0 ? ' <span class="crown">\ud83d\udc51</span>' : ''}</div>
       <div class="barbg"><div class="barfill" style="width:${(r.pts/max*100).toFixed(0)}%"></div></div>
       <div class="score">${r.pts} / 18</div>
     </div>
@@ -376,7 +404,8 @@ async function renderLeaderboard(){
 
 async function renderMonth(){
   const el = document.getElementById('monthGrid');
-  if(allUsers.length === 0){ el.innerHTML = '<div class="empty">No one has joined yet.</div>'; return; }
+  const entries = Object.entries(userMap); // [uid, name]
+  if(entries.length === 0){ el.innerHTML = '<div class="empty">No one has joined yet.</div>'; return; }
 
   const monthStart = new Date(currentMonday.getFullYear(), currentMonday.getMonth(), 1);
   const monthEnd = new Date(currentMonday.getFullYear(), currentMonday.getMonth()+1, 0);
@@ -390,21 +419,21 @@ async function renderMonth(){
 
   let html = '';
   for(const wk of weeks){
-    const results = await Promise.all(allUsers.map(async u=>{
-      const wd = await getWeekEntry(u, wk);
-      return {user:u, pts: pointsForWeek(wd)};
+    const results = await Promise.all(entries.map(async ([uid,name])=>{
+      const wd = await getWeekEntry(uid, wk);
+      return {name, pts: pointsForWeek(wd)};
     }));
     const max = 18;
     const label = wk.toLocaleDateString('en-GB',{day:'numeric',month:'short'});
     html += `<div class="mweek"><div class="wk">${label}</div><div class="bars">`;
     results.forEach(r=>{
       const h = Math.max(4, (r.pts/max*100));
-      html += `<div class="seg" title="${r.user}: ${r.pts}pts"><div class="fill" style="height:${h}%"></div></div>`;
+      html += `<div class="seg" title="${r.name}: ${r.pts}pts"><div class="fill" style="height:${h}%"></div></div>`;
     });
     html += `</div></div>`;
   }
   html += `<div class="mweek"><div class="wk"></div><div class="bars">` +
-    allUsers.map(u=>`<div class="who">${u}</div>`).join('') + `</div></div>`;
+    entries.map(([uid,name])=>`<div class="who">${name}</div>`).join('') + `</div></div>`;
   el.innerHTML = html || '<div class="empty">Nothing logged this month yet.</div>';
 }
 
@@ -416,50 +445,38 @@ document.getElementById('nextWeek').addEventListener('click', async ()=>{
   currentMonday = new Date(currentMonday); currentMonday.setDate(currentMonday.getDate()+7);
   attachWeekListener();
 });
-document.getElementById('userSelect').addEventListener('change', async (e)=>{
-  currentUser = e.target.value;
-  await renderGrid();
+
+document.getElementById('googleSignInBtn').addEventListener('click', async ()=>{
+  const provider = new firebase.auth.GoogleAuthProvider();
+  try{
+    await auth.signInWithPopup(provider);
+  }catch(e){
+    alert('Sign-in failed: ' + e.message);
+  }
 });
+document.getElementById('signOutBtn').addEventListener('click', async ()=>{
+  await auth.signOut();
+});
+
 document.getElementById('removeUserBtn').addEventListener('click', async ()=>{
-  if(!currentUser) return;
+  const sel = document.getElementById('adminRemoveSelect');
+  const uidToRemove = sel.value;
+  const nameToRemove = sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].textContent : null;
+  if(!uidToRemove || !nameToRemove) return;
   const pw = prompt('Enter admin password to remove someone:');
   if(pw === null) return;
   if(pw !== ADMIN_PASSWORD){
     alert('Wrong password — only the group admin can remove people.');
     return;
   }
-  const ok = confirm(`Remove "${currentUser}" from the group? This also deletes their tracked days.`);
+  const ok = confirm(`Remove "${nameToRemove}" from the group? This also deletes their tracked days.`);
   if(!ok) return;
-  const nameToRemove = currentUser;
-  await removeUserFromGroup(nameToRemove);
-  // remove their data across all weeks
-  try{
-    const snap = await db.ref('weeks').once('value');
-    const weeksData = snap.val() || {};
-    const updates = {};
-    Object.keys(weeksData).forEach(wk=>{
-      updates[`weeks/${wk}/${safeKey(nameToRemove)}`] = null;
-    });
-    if(Object.keys(updates).length) await db.ref().update(updates);
-  }catch(e){ console.error(e); }
-  currentUser = null; // the realtime 'users' listener below will repopulate + re-render
+  await removeUserFromGroup(uidToRemove);
 });
 
-document.getElementById('addUserBtn').addEventListener('click', async ()=>{
-  const input = document.getElementById('newUserInput');
-  const name = input.value.trim();
-  if(!name) return;
-  await addUserToGroup(name);
-  currentUser = name;
-  input.value = '';
-  // realtime 'users' listener will re-render the dropdown/board;
-  // render the grid now so this person sees their own state immediately
-  await renderGrid();
-});
-
-// Live sync: whenever ANYONE adds/removes a name, or ticks a box anywhere
-// in the currently-viewed week, everyone's screen updates automatically —
-// no refresh needed.
+// Live sync: whenever ANYONE ticks a box anywhere in the currently-viewed
+// week, or the shared user list changes, everyone's screen updates
+// automatically — no refresh needed.
 let currentWeekListenerRef = null;
 
 function attachWeekListener(){
@@ -472,17 +489,38 @@ function attachWeekListener(){
   });
 }
 
-(async function init(){
+(function init(){
+  // Shared user list — updates everyone's leaderboard/month/admin-dropdown live
   db.ref('users').on('value', async (snap)=>{
-    const val = snap.val() || {};
-    allUsers = [...new Set(Object.values(val))];
-    if(currentUser && !allUsers.includes(currentUser)) currentUser = null;
-    if(!currentUser && allUsers.length) currentUser = allUsers[0];
-    renderUserSelect();
+    userMap = snap.val() || {};
+    renderAdminSelect();
+    await renderLeaderboard();
+    await renderMonth();
+  });
+
+  // Auth state — drives sign-in/out UI and which row is editable
+  auth.onAuthStateChanged(async (user)=>{
+    const signedOutBar = document.getElementById('signedOutBar');
+    const signedInBar = document.getElementById('signedInBar');
+    if(user){
+      currentUid = user.uid;
+      currentName = user.displayName || user.email || 'Anonymous';
+      await registerCurrentUser(currentUid, currentName);
+      document.getElementById('whoAmIName').textContent = `Signed in as ${currentName}`;
+      document.getElementById('whoAmIPic').src = user.photoURL || '';
+      signedOutBar.style.display = 'none';
+      signedInBar.style.display = 'flex';
+    }else{
+      currentUid = null;
+      currentName = null;
+      signedOutBar.style.display = 'flex';
+      signedInBar.style.display = 'none';
+    }
     await renderGrid();
     await renderLeaderboard();
     await renderMonth();
   });
+
   attachWeekListener();
 })();
 </script>
