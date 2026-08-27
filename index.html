@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Streak Scoreboard</title>
+<title>GymSharks Scoreboard</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet">
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
@@ -135,7 +135,7 @@
 
   <header class="top">
     <div>
-      <h1>Streak <span>Scoreboard</span></h1>
+      <h1>GymSharks <span>Scoreboard</span></h1>
       <div class="sub">Diet · Recovery · Workout — 1 point each, tick it off, no paper needed</div>
     </div>
     <div class="weeknav">
@@ -207,7 +207,7 @@ const db = firebase.database();
 
 // Only someone who knows this can remove a person from the group.
 // Change this to your own secret before going live.
-const ADMIN_PASSWORD = "Gymsharks@2026";
+const ADMIN_PASSWORD = "changeme123";
 
 const DAYS = ["Mon","Tue","Wed","Thu","Fri","Sat"];
 const CATS = ["diet","recovery","workout"];
@@ -242,16 +242,30 @@ async function loadUsers(){
   try{
     const snap = await db.ref('users').once('value');
     const val = snap.val() || {};
-    allUsers = Object.values(val);
+    allUsers = [...new Set(Object.values(val))];
   }catch(e){ console.error(e); allUsers = []; }
 }
 // Adds/removes ONE user at a time — never overwrites the whole list,
 // so two friends adding their names at the same moment can't wipe each other out.
 async function addUserToGroup(name){
-  await db.ref(`users/${safeKey(name)}`).set(name);
+  // guard against duplicates, including ones saved in an older format
+  const snap = await db.ref('users').once('value');
+  const val = snap.val() || {};
+  const alreadyThere = Object.values(val).includes(name);
+  if(!alreadyThere){
+    await db.ref(`users/${safeKey(name)}`).set(name);
+  }
 }
 async function removeUserFromGroup(name){
-  await db.ref(`users/${safeKey(name)}`).remove();
+  // find and remove EVERY entry with this name, no matter how it was stored
+  // (handles old array-style entries as well as the newer key-per-name format)
+  const snap = await db.ref('users').once('value');
+  const val = snap.val() || {};
+  const updates = {};
+  Object.keys(val).forEach(key=>{
+    if(val[key] === name) updates[`users/${key}`] = null;
+  });
+  if(Object.keys(updates).length) await db.ref().update(updates);
 }
 
 function renderUserSelect(){
@@ -461,7 +475,7 @@ function attachWeekListener(){
 (async function init(){
   db.ref('users').on('value', async (snap)=>{
     const val = snap.val() || {};
-    allUsers = Object.values(val);
+    allUsers = [...new Set(Object.values(val))];
     if(currentUser && !allUsers.includes(currentUser)) currentUser = null;
     if(!currentUser && allUsers.length) currentUser = allUsers[0];
     renderUserSelect();
@@ -474,8 +488,4 @@ function attachWeekListener(){
 </script>
 
 </body>
-<<<<<<< HEAD
 </html>
-=======
-</html>
->>>>>>> b7ba030 (fix shared leaderboard bug + live sync)
