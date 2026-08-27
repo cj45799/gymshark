@@ -506,7 +506,7 @@ function attachWeekListener(){
       currentUid = user.uid;
       currentName = user.displayName || user.email || 'Anonymous';
       await registerCurrentUser(currentUid, currentName);
-      document.getElementById('whoAmIName').textContent = `Signed in as ${currentName}`;
+      document.getElementById('whoAmIName').textContent = `Signed in as ${currentName} (${user.email})`;
       document.getElementById('whoAmIPic').src = user.photoURL || '';
       signedOutBar.style.display = 'none';
       signedInBar.style.display = 'flex';
